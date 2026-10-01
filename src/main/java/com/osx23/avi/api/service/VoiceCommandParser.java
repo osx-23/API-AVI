@@ -20,10 +20,10 @@ public class VoiceCommandParser {
     private static final Map<String, String> PHONETIC = Map.ofEntries(
             Map.entry("alfa", "A"), Map.entry("alpha", "A"),
             Map.entry("bravo", "B"),
-            Map.entry("charlie", "C"), Map.entry("charly", "C"), Map.entry("charly", "C"),
+            Map.entry("charlie", "C"), Map.entry("charly", "C"),
             Map.entry("delta", "D"),
             Map.entry("echo", "E"), Map.entry("eco", "E"),
-            Map.entry("foxtrot", "F"), Map.entry("foxtrot", "F"),
+            Map.entry("foxtrot", "F"),
             Map.entry("golf", "G"),
             Map.entry("hotel", "H"),
             Map.entry("india", "I"),
