@@ -70,6 +70,9 @@
     .meter{height:10px;flex:1;min-width:180px;background:#e8eef3;border-radius:999px;overflow:hidden}
     .meter-fill{height:100%;width:0;background:linear-gradient(90deg,#37a36b,#e7a72c,#d93025);transition:width .08s linear}
     .device-name{margin-top:8px;color:var(--muted);font-size:12px}
+    .engine-status{margin-top:8px;padding:8px 10px;border-radius:10px;background:#f6f9fb;color:var(--muted);font-size:12px}
+    .engine-status.local{background:#eaf8f2;color:var(--success)}
+    .engine-status.remote{background:#fff7e8;color:#8a5b10}
     @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.55);opacity:.45}}
     @media(max-width:800px){.grid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.field.full{grid-column:auto}header{align-items:flex-start;flex-direction:column}}
   </style>
@@ -115,6 +118,7 @@
           </div>
         </div>
         <div class="device-name" id="deviceName">Entrada de audio: sin comprobar</div>
+        <div class="engine-status" id="engineStatus">Motor de voz: comprobando compatibilidad...</div>
       </div>
 
       <div class="samples">
@@ -177,6 +181,7 @@
   const audioInputSelect = $("audioInputSelect");
   const meterFill = $("meterFill");
   const deviceName = $("deviceName");
+  const engineStatus = $("engineStatus");
   let lastParsed = null;
   let micTestStream = null;
   let micAudioContext = null;
@@ -502,7 +507,24 @@
   });
 
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const LocalRecognition = window.SpeechRecognition;
   const micBtn = $("micBtn");
+
+  const supportsLocalRecognition = !!(
+    LocalRecognition &&
+    LocalRecognition.prototype &&
+    "processLocally" in LocalRecognition.prototype &&
+    typeof LocalRecognition.available === "function" &&
+    typeof LocalRecognition.install === "function"
+  );
+
+  if (supportsLocalRecognition) {
+    engineStatus.className = "engine-status";
+    engineStatus.textContent = "Motor de voz: reconocimiento local disponible; se preparará al pulsar Hablar.";
+  } else {
+    engineStatus.className = "engine-status remote";
+    engineStatus.textContent = "Motor de voz: reconocimiento remoto del navegador.";
+  }
 
   if (!Recognition) {
     micBtn.disabled = true;
@@ -520,6 +542,83 @@
     let finalTranscript = "";
     let retryCount = 0;
     let manualStop = false;
+    let localRecognitionReady = false;
+    let localRecognitionChecked = false;
+    let activeRecognitionMode = "remote";
+
+    async function prepareLocalRecognition() {
+      if (!supportsLocalRecognition) {
+        recognition.processLocally = false;
+        activeRecognitionMode = "remote";
+        return false;
+      }
+
+      if (localRecognitionReady) {
+        recognition.processLocally = true;
+        activeRecognitionMode = "local";
+        return true;
+      }
+
+      if (localRecognitionChecked) {
+        recognition.processLocally = false;
+        activeRecognitionMode = "remote";
+        return false;
+      }
+
+      localRecognitionChecked = true;
+      const languages = ["es-PE", "es-ES", "es-MX"];
+
+      for (const language of languages) {
+        try {
+          engineStatus.className = "engine-status";
+          engineStatus.textContent = "Motor de voz: comprobando paquete local " + language + "...";
+
+          const availability = await LocalRecognition.available({
+            langs: [language],
+            processLocally: true
+          });
+
+          if (availability === "available") {
+            recognition.lang = language;
+            recognition.processLocally = true;
+            localRecognitionReady = true;
+            activeRecognitionMode = "local";
+            engineStatus.className = "engine-status local";
+            engineStatus.textContent = "Motor de voz: local (" + language + ") ✓";
+            return true;
+          }
+
+          if (availability === "downloadable" || availability === "downloading") {
+            engineStatus.className = "engine-status";
+            engineStatus.textContent = "Motor de voz: instalando paquete " + language + "...";
+
+            const installed = await LocalRecognition.install({
+              langs: [language],
+              processLocally: true
+            });
+
+            if (installed) {
+              recognition.lang = language;
+              recognition.processLocally = true;
+              localRecognitionReady = true;
+              activeRecognitionMode = "local";
+              engineStatus.className = "engine-status local";
+              engineStatus.textContent = "Motor de voz: local (" + language + ") ✓";
+              return true;
+            }
+          }
+        } catch (error) {
+          console.warn("Reconocimiento local no disponible para", language, error);
+        }
+      }
+
+      recognition.lang = "es-PE";
+      recognition.processLocally = false;
+      activeRecognitionMode = "remote";
+      engineStatus.className = "engine-status remote";
+      engineStatus.textContent = "Motor de voz: local no disponible; usando servicio remoto.";
+      return false;
+    }
 
     async function ensureMicrophonePermission() {
       if (!navigator.mediaDevices?.getUserMedia) return true;
@@ -551,6 +650,8 @@
 
         const allowed = await ensureMicrophonePermission();
         if (!allowed) return;
+
+        await prepareLocalRecognition();
       } else {
         receivedSpeech = false;
         manualStop = false;
@@ -569,7 +670,9 @@
       micBtn.textContent = "■ Detener";
       setMicStatus("listening", "Escuchando… empieza a hablar ahora.");
       validation.className = "validation";
-      validation.textContent = "Escuchando tu comando...";
+      validation.textContent = activeRecognitionMode === "local"
+        ? "Escuchando con reconocimiento local..."
+        : "Escuchando con reconocimiento remoto...";
     };
 
     recognition.onspeechstart = () => {
@@ -637,8 +740,29 @@
 
       if (event.error === "network") {
         validation.className = "validation error";
-        validation.textContent = "El servicio de reconocimiento de voz del navegador tuvo un problema de red. Puedes seguir escribiendo la frase manualmente.";
-        setMicStatus("", "Error de red del reconocimiento del navegador.");
+        validation.textContent = supportsLocalRecognition
+          ? "Falló el reconocimiento remoto. Pulsa Hablar nuevamente para intentar usar reconocimiento local."
+          : "El micrófono funciona, pero el servicio remoto de reconocimiento del navegador falló. Este navegador no ofrece reconocimiento local compatible.";
+        setMicStatus("", "La captura de audio funciona; falló únicamente la conversión de voz a texto.");
+        engineStatus.className = "engine-status remote";
+        engineStatus.textContent = supportsLocalRecognition
+          ? "Motor de voz: servicio remoto falló; se intentará modo local."
+          : "Motor de voz: remoto con error de red.";
+        if (supportsLocalRecognition) {
+          localRecognitionChecked = false;
+        }
+        return;
+      }
+
+      if (event.error === "language-not-supported") {
+        localRecognitionReady = false;
+        localRecognitionChecked = true;
+        recognition.processLocally = false;
+        activeRecognitionMode = "remote";
+        engineStatus.className = "engine-status remote";
+        engineStatus.textContent = "Motor de voz: paquete local de español no soportado; usando remoto.";
+        validation.className = "validation";
+        validation.textContent = "El paquete local de español no está disponible en este navegador.";
         return;
       }
 
