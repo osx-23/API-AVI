@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AVI · Laboratorio de voz</title>
+  <style>
+    :root {
+      --bg:#eef4f9; --card:#fff; --text:#17334b; --muted:#6c8193;
+      --primary:#0b64d8; --primary2:#084ea9; --border:#dbe5ed;
+      --success:#087a55; --danger:#b3261e;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;background:linear-gradient(135deg,#eef5fb,#f8fafc);
+      color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      min-height:100vh;
+    }
+    main{width:min(1080px,calc(100% - 32px));margin:36px auto 60px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:24px}
+    h1{margin:0;font-size:28px;letter-spacing:-.6px}
+    header p{margin:5px 0 0;color:var(--muted)}
+    .status{background:#fff;border:1px solid var(--border);padding:9px 13px;border-radius:999px;font-size:13px}
+    .grid{display:grid;grid-template-columns:1.08fr .92fr;gap:22px;align-items:start}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:22px;padding:22px;box-shadow:0 16px 45px rgba(30,70,105,.08)}
+    h2{font-size:19px;margin:0 0 6px}
+    .sub{color:var(--muted);font-size:13px;margin:0 0 18px;line-height:1.5}
+    textarea,input{
+      width:100%;border:1px solid var(--border);border-radius:14px;padding:13px;
+      font:inherit;color:var(--text);background:#fbfdff;outline:none;
+    }
+    textarea{min-height:132px;resize:vertical}
+    textarea:focus,input:focus{border-color:#7cb6ff;box-shadow:0 0 0 3px rgba(11,100,216,.09)}
+    .buttons{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+    button{
+      border:0;border-radius:13px;padding:12px 15px;font-weight:750;cursor:pointer;
+      background:#e9f0f6;color:#35566d;
+    }
+    button.primary{background:var(--primary);color:#fff}
+    button.primary:hover{background:var(--primary2)}
+    button.mic{background:#17334b;color:white}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .samples{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px}
+    .samples button{font-size:12px;padding:8px 10px;background:white;border:1px solid var(--border)}
+    .fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .field.full{grid-column:1/-1}
+    label{display:block;font-size:12px;font-weight:800;color:var(--muted);margin:0 0 6px;text-transform:uppercase;letter-spacing:.6px}
+    #placa{font-size:26px;font-weight:800;letter-spacing:3px;color:var(--primary)}
+    .validation{margin-top:14px;padding:12px;border-radius:13px;font-size:13px;background:#f4f7fa;color:var(--muted);min-height:42px}
+    .validation.ok{background:#eaf8f2;color:var(--success)}
+    .validation.error{background:#fff0ef;color:var(--danger)}
+    .history{margin-top:22px}
+    .history-item{padding:12px 0;border-bottom:1px solid #edf1f4;display:flex;justify-content:space-between;gap:15px}
+    .history-item:last-child{border-bottom:0}
+    .history-item strong{display:block}
+    .history-item small{color:var(--muted)}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .raw{margin-top:18px;background:#142638;color:#dce8f1;border-radius:14px;padding:13px;overflow:auto;font-size:12px;min-height:46px}
+    @media(max-width:800px){.grid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.field.full{grid-column:auto}header{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>AVI · Laboratorio de voz</h1>
+      <p>Pruebas del parser y del registro en Supabase sin necesitar Android.</p>
+    </div>
+    <div class="status" id="apiStatus">Comprobando API...</div>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Entrada operativa</h2>
+      <p class="sub">Puedes escribir la frase o usar el micrófono de Chrome. El audio no se envía a la API: el navegador genera texto y la API interpreta ese texto.</p>
+
+      <textarea id="texto" placeholder="Ejemplo: Fuga vía ciento cincuenta y uno placa Bravo Tango Lima dos cuatro cinco"></textarea>
+
+      <div class="buttons">
+        <button class="mic" id="micBtn">🎤 Hablar</button>
+        <button class="primary" id="interpretBtn">Interpretar</button>
+        <button id="clearBtn">Limpiar</button>
+      </div>
+
+      <div class="samples">
+        <button data-text="Fuga vía 151">Fuga vía 151</button>
+        <button data-text="Fuga vía ciento cincuenta y uno">Vía hablada</button>
+        <button data-text="Fuga vía 151 placa Bravo Tango Lima dos cuatro cinco">Con placa</button>
+        <button data-text="Fuga vía uno cinco uno placa Alfa Bravo Charlie uno dos tres">Dígitos separados</button>
+      </div>
+
+      <div class="raw" id="raw">{ "esperando": true }</div>
+    </section>
+
+    <section class="card">
+      <h2>Resultado interpretado</h2>
+      <p class="sub">Puedes corregir los valores antes de registrar.</p>
+
+      <div class="fields">
+        <div>
+          <label for="tipo">Tipo</label>
+          <input id="tipo" value="FUGA">
+        </div>
+        <div>
+          <label for="via">Vía</label>
+          <input id="via" inputmode="numeric">
+        </div>
+        <div class="field full">
+          <label for="placa">Placa</label>
+          <input id="placa" maxlength="10">
+        </div>
+      </div>
+
+      <div class="validation" id="validation">Interpreta una frase para comenzar.</div>
+
+      <div class="buttons">
+        <button class="primary" id="registerBtn" disabled>Registrar en Supabase</button>
+        <button id="reloadBtn">Actualizar historial</button>
+      </div>
+
+      <div class="history">
+        <h2>Últimos registros</h2>
+        <div id="history"><p class="sub">Cargando...</p></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const texto = $("texto");
+  const tipo = $("tipo");
+  const via = $("via");
+  const placa = $("placa");
+  const raw = $("raw");
+  const validation = $("validation");
+  const registerBtn = $("registerBtn");
+  let lastParsed = null;
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      headers: {"Content-Type":"application/json", ...(options.headers || {})},
+      ...options
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
+
+    if (!response.ok) {
+      const message = typeof body === "object"
+        ? (body.message || body.error || JSON.stringify(body))
+        : body;
+      throw new Error(message || "Error HTTP " + response.status);
+    }
+    return body;
+  }
+
+  async function checkStatus() {
+    try {
+      const status = await api("/api/v1/status");
+      $("apiStatus").textContent = status.supabaseConfigurado
+        ? "API ✓ · Supabase ✓"
+        : "API ✓ · Supabase pendiente";
+    } catch (e) {
+      $("apiStatus").textContent = "API no disponible";
+    }
+  }
+
+  async function interpret() {
+    const value = texto.value.trim();
+    if (!value) return;
+
+    validation.className = "validation";
+    validation.textContent = "Interpretando...";
+    registerBtn.disabled = true;
+
+    try {
+      const result = await api("/api/v1/interpretar", {
+        method:"POST",
+        body:JSON.stringify({texto:value})
+      });
+
+      lastParsed = result;
+      tipo.value = result.tipo || "";
+      via.value = result.via ?? "";
+      placa.value = result.placa || "";
+      raw.textContent = JSON.stringify(result, null, 2);
+
+      if (result.valido) {
+        validation.className = "validation ok";
+        validation.textContent = "✓ Frase válida. Revisa y confirma el registro.";
+        registerBtn.disabled = false;
+      } else {
+        validation.className = "validation error";
+        validation.textContent = result.errores.join(" ");
+      }
+    } catch (e) {
+      validation.className = "validation error";
+      validation.textContent = e.message;
+      raw.textContent = JSON.stringify({error:e.message}, null, 2);
+    }
+  }
+
+  async function register() {
+    const viaNumber = Number(via.value);
+    if (!tipo.value.trim() || !Number.isInteger(viaNumber) || viaNumber <= 0) {
+      validation.className = "validation error";
+      validation.textContent = "Tipo y vía válida son obligatorios.";
+      return;
+    }
+
+    registerBtn.disabled = true;
+    validation.className = "validation";
+    validation.textContent = "Guardando en Supabase...";
+
+    try {
+      const saved = await api("/api/v1/registros", {
+        method:"POST",
+        body:JSON.stringify({
+          tipo:tipo.value.trim(),
+          via:viaNumber,
+          placa:placa.value.trim() || null,
+          textoReconocido:texto.value.trim() || null
+        })
+      });
+
+      validation.className = "validation ok";
+      validation.textContent = "✓ Registro guardado: " + saved.id;
+      raw.textContent = JSON.stringify(saved, null, 2);
+      await loadHistory();
+    } catch (e) {
+      validation.className = "validation error";
+      validation.textContent = e.message;
+    } finally {
+      registerBtn.disabled = false;
+    }
+  }
+
+  async function loadHistory() {
+    const holder = $("history");
+    holder.innerHTML = '<p class="sub">Cargando...</p>';
+
+    try {
+      const rows = await api("/api/v1/registros");
+      if (!rows.length) {
+        holder.innerHTML = '<p class="sub">Aún no hay registros.</p>';
+        return;
+      }
+
+      holder.innerHTML = rows.slice(0, 10).map(row => {
+        const when = row.creado_en ? new Date(row.creado_en).toLocaleString("es-PE") : "";
+        return '<div class="history-item"><div><strong>' +
+          escapeHtml(row.tipo) + ' · Vía ' + escapeHtml(String(row.via)) +
+          '</strong><small>' + escapeHtml(row.placa || "Sin placa") +
+          '</small></div><small>' + escapeHtml(when) + '</small></div>';
+      }).join("");
+    } catch (e) {
+      holder.innerHTML = '<p class="sub">No disponible: ' + escapeHtml(e.message) + '</p>';
+    }
+  }
+
+  function escapeHtml(value) {
+    return value.replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
+  }
+
+  $("interpretBtn").addEventListener("click", interpret);
+  $("registerBtn").addEventListener("click", register);
+  $("reloadBtn").addEventListener("click", loadHistory);
+  $("clearBtn").addEventListener("click", () => {
+    texto.value = ""; via.value = ""; placa.value = ""; tipo.value = "FUGA";
+    lastParsed = null; raw.textContent = '{ "esperando": true }';
+    validation.className = "validation";
+    validation.textContent = "Interpreta una frase para comenzar.";
+    registerBtn.disabled = true;
+  });
+
+  document.querySelectorAll("[data-text]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      texto.value = btn.dataset.text;
+      interpret();
+    });
+  });
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const micBtn = $("micBtn");
+
+  if (!Recognition) {
+    micBtn.disabled = true;
+    micBtn.textContent = "Micrófono no compatible";
+  } else {
+    const recognition = new Recognition();
+    recognition.lang = "es-PE";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      micBtn.textContent = "🔴 Escuchando...";
+      micBtn.disabled = true;
+    };
+
+    recognition.onresult = event => {
+      let current = "";
+      let isFinal = false;
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        current += event.results[i][0].transcript;
+        if (event.results[i].isFinal) isFinal = true;
+      }
+
+      texto.value = current.trim();
+      if (isFinal) interpret();
+    };
+
+    recognition.onerror = event => {
+      validation.className = "validation error";
+      validation.textContent = "Micrófono: " + event.error;
+    };
+
+    recognition.onend = () => {
+      micBtn.textContent = "🎤 Hablar";
+      micBtn.disabled = false;
+    };
+
+    micBtn.addEventListener("click", () => recognition.start());
+  }
+
+  checkStatus();
+  loadHistory();
+</script>
+</body>
+</html>
