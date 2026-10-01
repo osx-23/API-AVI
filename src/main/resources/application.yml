@@ -1,6 +1,10 @@
 spring:
   application:
     name: API-AVI
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 25MB
 
 server:
   port: ${PORT:8080}
@@ -9,3 +13,7 @@ avi:
   supabase:
     url: ${SUPABASE_URL:https://adozechgzkbqopujaapp.supabase.co}
     key: ${SUPABASE_PUBLISHABLE_KEY:}
+  openai:
+    api-key: ${OPENAI_API_KEY:}
+    transcription-model: ${OPENAI_TRANSCRIPTION_MODEL:gpt-4o-mini-transcribe}
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
