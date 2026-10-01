@@ -183,6 +183,7 @@
   const deviceName = $("deviceName");
   const engineStatus = $("engineStatus");
   let lastParsed = null;
+  let supabaseConfigured = false;
   let micTestStream = null;
   let micAudioContext = null;
   let micAnimationFrame = null;
@@ -381,12 +382,34 @@
   async function checkStatus() {
     try {
       const status = await api("/api/v1/status");
-      $("apiStatus").textContent = status.supabaseConfigurado
+      supabaseConfigured = !!status.supabaseConfigurado;
+      $("apiStatus").textContent = supabaseConfigured
         ? "API ✓ · Supabase ✓"
         : "API ✓ · Supabase pendiente";
+      $("apiStatus").title = supabaseConfigured
+        ? "Backend y persistencia listos"
+        : "Falta SUPABASE_PUBLISHABLE_KEY en el proceso de Spring Boot";
+      validateManualForm();
+      return status;
     } catch (e) {
+      supabaseConfigured = false;
       $("apiStatus").textContent = "API no disponible";
+      registerBtn.disabled = true;
+      return null;
     }
+  }
+
+  function validateManualForm() {
+    const viaNumber = Number(via.value);
+    const plate = placa.value.trim();
+    const valid = tipo.value.trim().toUpperCase() === "FUGA"
+      && Number.isInteger(viaNumber)
+      && viaNumber >= 1
+      && viaNumber <= 9999
+      && /^[A-Z0-9]{0,10}$/.test(plate);
+
+    registerBtn.disabled = !(valid && supabaseConfigured);
+    return valid;
   }
 
   async function interpret() {
@@ -412,11 +435,11 @@
       if (result.valido) {
         validation.className = "validation ok";
         validation.textContent = "✓ Frase válida. Revisa y confirma el registro.";
-        registerBtn.disabled = false;
       } else {
         validation.className = "validation error";
-        validation.textContent = result.errores.join(" ");
+        validation.textContent = result.errores.join(" ") + " Puedes corregir los campos manualmente.";
       }
+      validateManualForm();
     } catch (e) {
       validation.className = "validation error";
       validation.textContent = e.message;
@@ -426,9 +449,16 @@
 
   async function register() {
     const viaNumber = Number(via.value);
-    if (!tipo.value.trim() || !Number.isInteger(viaNumber) || viaNumber <= 0) {
+
+    if (!supabaseConfigured) {
       validation.className = "validation error";
-      validation.textContent = "Tipo y vía válida son obligatorios.";
+      validation.textContent = "Supabase no está configurado. Inicia Spring Boot con SUPABASE_PUBLISHABLE_KEY.";
+      return;
+    }
+
+    if (!validateManualForm()) {
+      validation.className = "validation error";
+      validation.textContent = "Revisa los campos: tipo FUGA, vía entre 1 y 9999 y placa alfanumérica de máximo 10 caracteres.";
       return;
     }
 
@@ -455,12 +485,18 @@
       validation.className = "validation error";
       validation.textContent = e.message;
     } finally {
-      registerBtn.disabled = false;
+      validateManualForm();
     }
   }
 
   async function loadHistory() {
     const holder = $("history");
+
+    if (!supabaseConfigured) {
+      holder.innerHTML = '<p class="sub">Supabase pendiente. Configura <code>SUPABASE_PUBLISHABLE_KEY</code> y reinicia la API.</p>';
+      return;
+    }
+
     holder.innerHTML = '<p class="sub">Cargando...</p>';
 
     try {
@@ -490,13 +526,38 @@
 
   $("interpretBtn").addEventListener("click", interpret);
   $("registerBtn").addEventListener("click", register);
-  $("reloadBtn").addEventListener("click", loadHistory);
+  $("reloadBtn").addEventListener("click", async () => {
+    await checkStatus();
+    await loadHistory();
+  });
+
+  via.addEventListener("input", () => {
+    via.value = via.value.replace(/\D/g, "").slice(0, 4);
+    validateManualForm();
+  });
+
+  placa.addEventListener("input", () => {
+    placa.value = placa.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+    validateManualForm();
+  });
+
+  tipo.addEventListener("input", () => {
+    tipo.value = tipo.value.toUpperCase();
+    validateManualForm();
+  });
+
+  texto.addEventListener("keydown", event => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      interpret();
+    }
+  });
   $("clearBtn").addEventListener("click", () => {
     texto.value = ""; via.value = ""; placa.value = ""; tipo.value = "FUGA";
     lastParsed = null; raw.textContent = '{ "esperando": true }';
     validation.className = "validation";
     validation.textContent = "Interpreta una frase para comenzar.";
-    registerBtn.disabled = true;
+    validateManualForm();
   });
 
   document.querySelectorAll("[data-text]").forEach(btn => {
@@ -546,6 +607,14 @@
     let localRecognitionChecked = false;
     let activeRecognitionMode = "remote";
 
+    function withTimeout(promise, ms, message) {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    }
+
     async function prepareLocalRecognition() {
       if (!supportsLocalRecognition) {
         recognition.processLocally = false;
@@ -573,10 +642,14 @@
           engineStatus.className = "engine-status";
           engineStatus.textContent = "Motor de voz: comprobando paquete local " + language + "...";
 
-          const availability = await LocalRecognition.available({
-            langs: [language],
-            processLocally: true
-          });
+          const availability = await withTimeout(
+            LocalRecognition.available({
+              langs: [language],
+              processLocally: true
+            }),
+            3000,
+            "Tiempo agotado al comprobar el paquete local"
+          );
 
           if (availability === "available") {
             recognition.lang = language;
@@ -592,10 +665,14 @@
             engineStatus.className = "engine-status";
             engineStatus.textContent = "Motor de voz: instalando paquete " + language + "...";
 
-            const installed = await LocalRecognition.install({
-              langs: [language],
-              processLocally: true
-            });
+            const installed = await withTimeout(
+              LocalRecognition.install({
+                langs: [language],
+                processLocally: true
+              }),
+              8000,
+              "Tiempo agotado al instalar el paquete local"
+            );
 
             if (installed) {
               recognition.lang = language;
@@ -800,9 +877,21 @@
     micBtn.addEventListener("click", () => startRecognition(false));
   }
 
-  checkStatus();
-  loadHistory();
-  loadAudioInputs(false).catch(() => {});
+  async function init() {
+    const browser = navigator.brave ? "Brave" : (/Chrome/.test(navigator.userAgent) ? "Chrome" : "Navegador");
+    document.title = "AVI · Laboratorio de voz · " + browser;
+
+    await checkStatus();
+    await loadHistory();
+    await loadAudioInputs(false).catch(() => {});
+
+    if (navigator.brave && !supportsLocalRecognition) {
+      engineStatus.className = "engine-status remote";
+      engineStatus.textContent = "Brave detectado: la captura de audio funciona, pero SpeechRecognition puede no estar disponible de forma fiable.";
+    }
+  }
+
+  init();
 </script>
 </body>
 </html>
