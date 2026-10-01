@@ -56,6 +56,15 @@
     .history-item small{color:var(--muted)}
     code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .raw{margin-top:18px;background:#142638;color:#dce8f1;border-radius:14px;padding:13px;overflow:auto;font-size:12px;min-height:46px}
+    .mic-status{display:flex;align-items:center;gap:9px;margin-top:12px;padding:10px 12px;border:1px solid var(--border);border-radius:13px;background:#fbfdff;color:var(--muted);font-size:13px}
+    .mic-dot{width:9px;height:9px;border-radius:50%;background:#a9b7c3;flex:0 0 auto}
+    .mic-status.listening{color:#8a241d;background:#fff5f4;border-color:#ffd0cc}
+    .mic-status.listening .mic-dot{background:#d93025;animation:pulse 1s infinite}
+    .mic-status.speech{color:var(--success);background:#eefaf5;border-color:#c5eadb}
+    .mic-status.speech .mic-dot{background:var(--success)}
+    .mic-status.processing{color:var(--primary);background:#eff6ff;border-color:#cbdfff}
+    .mic-status.processing .mic-dot{background:var(--primary)}
+    @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.55);opacity:.45}}
     @media(max-width:800px){.grid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.field.full{grid-column:auto}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -80,6 +89,11 @@
         <button class="mic" id="micBtn">🎤 Hablar</button>
         <button class="primary" id="interpretBtn">Interpretar</button>
         <button id="clearBtn">Limpiar</button>
+      </div>
+
+      <div class="mic-status" id="micStatus">
+        <span class="mic-dot"></span>
+        <span id="micStatusText">Micrófono listo. Pulsa Hablar y empieza a dictar inmediatamente.</span>
       </div>
 
       <div class="samples">
@@ -135,7 +149,14 @@
   const raw = $("raw");
   const validation = $("validation");
   const registerBtn = $("registerBtn");
+  const micStatus = $("micStatus");
+  const micStatusText = $("micStatusText");
   let lastParsed = null;
+
+  function setMicStatus(state, message) {
+    micStatus.className = "mic-status" + (state ? " " + state : "");
+    micStatusText.textContent = message;
+  }
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -291,41 +312,173 @@
   if (!Recognition) {
     micBtn.disabled = true;
     micBtn.textContent = "Micrófono no compatible";
+    setMicStatus("", "Este navegador no ofrece reconocimiento de voz compatible. Usa Chrome o escribe la frase.");
   } else {
     const recognition = new Recognition();
     recognition.lang = "es-PE";
     recognition.interimResults = true;
     recognition.continuous = false;
+    recognition.maxAlternatives = 3;
+
+    let listening = false;
+    let receivedSpeech = false;
+    let finalTranscript = "";
+    let retryCount = 0;
+    let manualStop = false;
+
+    async function ensureMicrophonePermission() {
+      if (!navigator.mediaDevices?.getUserMedia) return true;
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        stream.getTracks().forEach(track => track.stop());
+        return true;
+      } catch (error) {
+        validation.className = "validation error";
+        validation.textContent = "No se pudo acceder al micrófono. Revisa el permiso del navegador y de macOS.";
+        setMicStatus("", "Permiso de micrófono bloqueado o dispositivo no disponible.");
+        return false;
+      }
+    }
+
+    async function startRecognition(isRetry = false) {
+      if (listening) {
+        manualStop = true;
+        recognition.stop();
+        return;
+      }
+
+      if (!isRetry) {
+        retryCount = 0;
+        finalTranscript = "";
+        receivedSpeech = false;
+        manualStop = false;
+
+        const allowed = await ensureMicrophonePermission();
+        if (!allowed) return;
+      } else {
+        receivedSpeech = false;
+        manualStop = false;
+      }
+
+      try {
+        recognition.start();
+      } catch (error) {
+        setMicStatus("", "No se pudo iniciar la escucha. Espera un momento e intenta otra vez.");
+      }
+    }
 
     recognition.onstart = () => {
-      micBtn.textContent = "🔴 Escuchando...";
-      micBtn.disabled = true;
+      listening = true;
+      receivedSpeech = false;
+      micBtn.textContent = "■ Detener";
+      setMicStatus("listening", "Escuchando… empieza a hablar ahora.");
+      validation.className = "validation";
+      validation.textContent = "Escuchando tu comando...";
+    };
+
+    recognition.onspeechstart = () => {
+      receivedSpeech = true;
+      setMicStatus("speech", "Voz detectada. Continúa hablando.");
+      validation.className = "validation";
+      validation.textContent = "Voz detectada...";
+    };
+
+    recognition.onspeechend = () => {
+      setMicStatus("processing", "Procesando lo escuchado…");
+      validation.className = "validation";
+      validation.textContent = "Procesando voz...";
     };
 
     recognition.onresult = event => {
-      let current = "";
-      let isFinal = false;
+      let interimTranscript = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        current += event.results[i][0].transcript;
-        if (event.results[i].isFinal) isFinal = true;
+        const part = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += part + " ";
+        } else {
+          interimTranscript += part;
+        }
       }
 
-      texto.value = current.trim();
-      if (isFinal) interpret();
+      const visible = (finalTranscript + interimTranscript).trim();
+      if (visible) {
+        texto.value = visible;
+        setMicStatus("speech", interimTranscript ? "Voz detectada. Transcribiendo en vivo…" : "Frase recibida.");
+      }
     };
 
     recognition.onerror = event => {
+      if (event.error === "no-speech") {
+        if (!manualStop && retryCount < 1) {
+          retryCount++;
+          validation.className = "validation";
+          validation.textContent = "No se detectó voz. Reintentando una vez… habla apenas veas “Escuchando”.";
+          setMicStatus("", "No se detectó voz. Preparando un nuevo intento…");
+          setTimeout(() => startRecognition(true), 900);
+          return;
+        }
+
+        validation.className = "validation";
+        validation.textContent = "No se detectó voz. Pulsa Hablar y empieza a dictar inmediatamente.";
+        setMicStatus("", "Sin voz detectada. Acércate al micrófono o revisa la entrada seleccionada.");
+        return;
+      }
+
+      if (event.error === "audio-capture") {
+        validation.className = "validation error";
+        validation.textContent = "No se encontró una entrada de audio disponible.";
+        setMicStatus("", "El navegador no pudo capturar audio del micrófono.");
+        return;
+      }
+
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        validation.className = "validation error";
+        validation.textContent = "El permiso de micrófono o reconocimiento de voz está bloqueado.";
+        setMicStatus("", "Permiso denegado. Habilita el micrófono para localhost:8080.");
+        return;
+      }
+
+      if (event.error === "network") {
+        validation.className = "validation error";
+        validation.textContent = "El servicio de reconocimiento de voz del navegador tuvo un problema de red. Puedes seguir escribiendo la frase manualmente.";
+        setMicStatus("", "Error de red del reconocimiento del navegador.");
+        return;
+      }
+
+      if (event.error === "aborted" && manualStop) {
+        setMicStatus("", "Escucha detenida.");
+        return;
+      }
+
       validation.className = "validation error";
       validation.textContent = "Micrófono: " + event.error;
+      setMicStatus("", "La escucha terminó con error: " + event.error);
     };
 
     recognition.onend = () => {
+      listening = false;
       micBtn.textContent = "🎤 Hablar";
-      micBtn.disabled = false;
+
+      const completedText = finalTranscript.trim();
+      if (completedText && !manualStop) {
+        texto.value = completedText;
+        setMicStatus("processing", "Transcripción terminada. Interpretando comando…");
+        interpret().finally(() => {
+          setMicStatus("", "Listo para una nueva prueba.");
+          finalTranscript = "";
+        });
+      } else if (!manualStop && receivedSpeech) {
+        setMicStatus("", "La voz terminó sin una transcripción final. Intenta nuevamente.");
+      } else if (manualStop) {
+        setMicStatus("", "Escucha detenida.");
+      }
+
+      manualStop = false;
     };
 
-    micBtn.addEventListener("click", () => recognition.start());
+    micBtn.addEventListener("click", () => startRecognition(false));
   }
 
   checkStatus();
