@@ -11,12 +11,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
           cache: maven
+
       - name: Test
         run: mvn -B test
+
       - name: Package
         run: mvn -B -DskipTests package
+
+      - name: Validate laboratory JavaScript
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          html = Path("src/main/resources/static/index.html").read_text()
+          start = html.rfind("<script>")
+          end = html.rfind("</script>")
+          if start < 0 or end < 0 or end <= start:
+              raise SystemExit("No inline script found in index.html")
+          js = html[start + len("<script>"):end]
+          Path("/tmp/avi-laboratory.js").write_text(js)
+          PY
+          node --check /tmp/avi-laboratory.js
