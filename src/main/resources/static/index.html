@@ -25,12 +25,13 @@
     .card{background:var(--card);border:1px solid var(--border);border-radius:22px;padding:22px;box-shadow:0 16px 45px rgba(30,70,105,.08)}
     h2{font-size:19px;margin:0 0 6px}
     .sub{color:var(--muted);font-size:13px;margin:0 0 18px;line-height:1.5}
-    textarea,input{
+    textarea,input,select{
       width:100%;border:1px solid var(--border);border-radius:14px;padding:13px;
       font:inherit;color:var(--text);background:#fbfdff;outline:none;
     }
     textarea{min-height:132px;resize:vertical}
-    textarea:focus,input:focus{border-color:#7cb6ff;box-shadow:0 0 0 3px rgba(11,100,216,.09)}
+    textarea:focus,input:focus,select:focus{border-color:#7cb6ff;box-shadow:0 0 0 3px rgba(11,100,216,.09)}
+    select{font:inherit;color:var(--text);background:#fbfdff;outline:none}
     .buttons{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
     button{
       border:0;border-radius:13px;padding:12px 15px;font-weight:750;cursor:pointer;
@@ -102,7 +103,12 @@
       </div>
 
       <div class="mic-tools">
-        <div class="row">
+        <label for="audioInputSelect">Entrada de audio para la prueba</label>
+        <select id="audioInputSelect">
+          <option value="">Detectar micrófonos...</option>
+        </select>
+        <div class="row" style="margin-top:10px">
+          <button id="refreshMicsBtn">Detectar entradas</button>
           <button id="testMicBtn">Probar micrófono</button>
           <div class="meter" aria-label="Nivel de entrada del micrófono">
             <div class="meter-fill" id="meterFill"></div>
@@ -167,6 +173,8 @@
   const micStatus = $("micStatus");
   const micStatusText = $("micStatusText");
   const testMicBtn = $("testMicBtn");
+  const refreshMicsBtn = $("refreshMicsBtn");
+  const audioInputSelect = $("audioInputSelect");
   const meterFill = $("meterFill");
   const deviceName = $("deviceName");
   let lastParsed = null;
@@ -177,6 +185,64 @@
   function setMicStatus(state, message) {
     micStatus.className = "mic-status" + (state ? " " + state : "");
     micStatusText.textContent = message;
+  }
+
+  function isVirtualMic(label) {
+    return /virtual|teams|zoom|blackhole|loopback|aggregate|soundflower/i.test(label || "");
+  }
+
+  function rankMic(label) {
+    const value = (label || "").toLowerCase();
+    if (/macbook|built-in|interno|integrado/.test(value)) return 100;
+    if (isVirtualMic(label)) return -100;
+    return 10;
+  }
+
+  async function loadAudioInputs(requestPermission = false) {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+
+    let permissionStream = null;
+    try {
+      if (requestPermission) {
+        permissionStream = await navigator.mediaDevices.getUserMedia({audio:true});
+      }
+
+      const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(device => device.kind === "audioinput");
+
+      const current = audioInputSelect.value;
+      audioInputSelect.innerHTML = "";
+
+      if (!devices.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No se encontraron micrófonos";
+        audioInputSelect.appendChild(option);
+        return [];
+      }
+
+      devices
+        .sort((a,b) => rankMic(b.label) - rankMic(a.label))
+        .forEach((device, index) => {
+          const option = document.createElement("option");
+          option.value = device.deviceId;
+          option.textContent = device.label || ("Micrófono " + (index + 1));
+          audioInputSelect.appendChild(option);
+        });
+
+      if (current && devices.some(d => d.deviceId === current)) {
+        audioInputSelect.value = current;
+      } else {
+        const preferred = devices.find(d => !isVirtualMic(d.label)) || devices[0];
+        audioInputSelect.value = preferred.deviceId;
+      }
+
+      return devices;
+    } finally {
+      if (permissionStream) {
+        permissionStream.getTracks().forEach(track => track.stop());
+      }
+    }
   }
 
   async function stopMicTest() {
@@ -211,8 +277,12 @@
     }
 
     try {
+      await loadAudioInputs(true);
+
+      const selectedDeviceId = audioInputSelect.value;
       micTestStream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          deviceId: selectedDeviceId ? {exact:selectedDeviceId} : undefined,
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true
@@ -223,7 +293,12 @@
       const settings = track?.getSettings?.() || {};
       const devices = await navigator.mediaDevices.enumerateDevices();
       const device = devices.find(d => d.kind === "audioinput" && (!settings.deviceId || d.deviceId === settings.deviceId));
-      deviceName.textContent = "Entrada de audio: " + (device?.label || track?.label || "micrófono activo");
+      const activeLabel = device?.label || track?.label || "micrófono activo";
+      deviceName.textContent = "Entrada de audio: " + activeLabel;
+
+      if (isVirtualMic(activeLabel)) {
+        setMicStatus("", "Estás usando un dispositivo virtual. Selecciona el micrófono físico del Mac.");
+      }
 
       micAudioContext = new (window.AudioContext || window.webkitAudioContext)();
       const source = micAudioContext.createMediaStreamSource(micTestStream);
@@ -257,6 +332,24 @@
       setMicStatus("", "Revisa los permisos de micrófono en el navegador y en macOS.");
     }
   }
+
+  refreshMicsBtn.addEventListener("click", async () => {
+    try {
+      const devices = await loadAudioInputs(true);
+      const selected = devices.find(d => d.deviceId === audioInputSelect.value);
+      deviceName.textContent = "Seleccionado: " + (selected?.label || "micrófono");
+      setMicStatus("", "Entradas actualizadas. Selecciona el micrófono físico y pulsa Probar micrófono.");
+    } catch (error) {
+      validation.className = "validation error";
+      validation.textContent = "No se pudieron detectar los micrófonos: " + (error.message || error.name);
+    }
+  });
+
+  audioInputSelect.addEventListener("change", async () => {
+    if (micTestStream) await stopMicTest();
+    const selected = audioInputSelect.options[audioInputSelect.selectedIndex];
+    deviceName.textContent = "Seleccionado: " + (selected?.textContent || "micrófono");
+  });
 
   testMicBtn.addEventListener("click", startMicTest);
 
@@ -585,6 +678,7 @@
 
   checkStatus();
   loadHistory();
+  loadAudioInputs(false).catch(() => {});
 </script>
 </body>
 </html>
