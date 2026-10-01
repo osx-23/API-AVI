@@ -64,6 +64,11 @@
     .mic-status.speech .mic-dot{background:var(--success)}
     .mic-status.processing{color:var(--primary);background:#eff6ff;border-color:#cbdfff}
     .mic-status.processing .mic-dot{background:var(--primary)}
+    .mic-tools{margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:14px;background:#fff}
+    .mic-tools .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .meter{height:10px;flex:1;min-width:180px;background:#e8eef3;border-radius:999px;overflow:hidden}
+    .meter-fill{height:100%;width:0;background:linear-gradient(90deg,#37a36b,#e7a72c,#d93025);transition:width .08s linear}
+    .device-name{margin-top:8px;color:var(--muted);font-size:12px}
     @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.55);opacity:.45}}
     @media(max-width:800px){.grid{grid-template-columns:1fr}.fields{grid-template-columns:1fr}.field.full{grid-column:auto}header{align-items:flex-start;flex-direction:column}}
   </style>
@@ -94,6 +99,16 @@
       <div class="mic-status" id="micStatus">
         <span class="mic-dot"></span>
         <span id="micStatusText">Micrófono listo. Pulsa Hablar y empieza a dictar inmediatamente.</span>
+      </div>
+
+      <div class="mic-tools">
+        <div class="row">
+          <button id="testMicBtn">Probar micrófono</button>
+          <div class="meter" aria-label="Nivel de entrada del micrófono">
+            <div class="meter-fill" id="meterFill"></div>
+          </div>
+        </div>
+        <div class="device-name" id="deviceName">Entrada de audio: sin comprobar</div>
       </div>
 
       <div class="samples">
@@ -151,12 +166,99 @@
   const registerBtn = $("registerBtn");
   const micStatus = $("micStatus");
   const micStatusText = $("micStatusText");
+  const testMicBtn = $("testMicBtn");
+  const meterFill = $("meterFill");
+  const deviceName = $("deviceName");
   let lastParsed = null;
+  let micTestStream = null;
+  let micAudioContext = null;
+  let micAnimationFrame = null;
 
   function setMicStatus(state, message) {
     micStatus.className = "mic-status" + (state ? " " + state : "");
     micStatusText.textContent = message;
   }
+
+  async function stopMicTest() {
+    if (micAnimationFrame) cancelAnimationFrame(micAnimationFrame);
+    micAnimationFrame = null;
+
+    if (micTestStream) {
+      micTestStream.getTracks().forEach(track => track.stop());
+      micTestStream = null;
+    }
+
+    if (micAudioContext) {
+      try { await micAudioContext.close(); } catch (_) {}
+      micAudioContext = null;
+    }
+
+    meterFill.style.width = "0%";
+    testMicBtn.textContent = "Probar micrófono";
+  }
+
+  async function startMicTest() {
+    if (micTestStream) {
+      await stopMicTest();
+      setMicStatus("", "Prueba de micrófono detenida.");
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      validation.className = "validation error";
+      validation.textContent = "Este navegador no permite probar el micrófono con getUserMedia.";
+      return;
+    }
+
+    try {
+      micTestStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+
+      const track = micTestStream.getAudioTracks()[0];
+      const settings = track?.getSettings?.() || {};
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const device = devices.find(d => d.kind === "audioinput" && (!settings.deviceId || d.deviceId === settings.deviceId));
+      deviceName.textContent = "Entrada de audio: " + (device?.label || track?.label || "micrófono activo");
+
+      micAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = micAudioContext.createMediaStreamSource(micTestStream);
+      const analyser = micAudioContext.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.7;
+      source.connect(analyser);
+
+      const data = new Uint8Array(analyser.fftSize);
+      testMicBtn.textContent = "Detener prueba";
+      setMicStatus("speech", "Micrófono abierto. Habla y verifica que se mueva la barra de nivel.");
+
+      const draw = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const normalized = (data[i] - 128) / 128;
+          sum += normalized * normalized;
+        }
+        const rms = Math.sqrt(sum / data.length);
+        const percent = Math.min(100, Math.max(1, rms * 420));
+        meterFill.style.width = percent + "%";
+        micAnimationFrame = requestAnimationFrame(draw);
+      };
+      draw();
+    } catch (error) {
+      await stopMicTest();
+      validation.className = "validation error";
+      validation.textContent = "No se pudo abrir el micrófono: " + (error.message || error.name);
+      deviceName.textContent = "Entrada de audio: no disponible";
+      setMicStatus("", "Revisa los permisos de micrófono en el navegador y en macOS.");
+    }
+  }
+
+  testMicBtn.addEventListener("click", startMicTest);
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
