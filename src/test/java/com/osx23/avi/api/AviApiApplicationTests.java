@@ -14,7 +14,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+        "avi.whisper.command=__avi_whisper_missing__"
+})
 @AutoConfigureMockMvc
 class AviApiApplicationTests {
 
@@ -22,15 +24,16 @@ class AviApiApplicationTests {
     private MockMvc mockMvc;
 
     @Test
-    void statusExponeInformacionDeLaV1() throws Exception {
+    void statusExponeWhisperLocal() throws Exception {
         mockMvc.perform(get("/api/v1/status"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.api").value("ok"))
-                .andExpect(jsonPath("$.version").value("0.3.0-v1"))
+                .andExpect(jsonPath("$.version").value("0.4.0-v1"))
                 .andExpect(jsonPath("$.parser").value("avi-voice-v1.1"))
                 .andExpect(jsonPath("$.supabaseConfigurado").isBoolean())
-                .andExpect(jsonPath("$.transcripcionConfigurada").isBoolean())
-                .andExpect(jsonPath("$.modeloTranscripcion").exists());
+                .andExpect(jsonPath("$.transcripcionConfigurada").value(false))
+                .andExpect(jsonPath("$.motorTranscripcion").value("whisper-local"))
+                .andExpect(jsonPath("$.modeloTranscripcion").value("whisper-local:small"));
     }
 
     @Test
@@ -50,7 +53,7 @@ class AviApiApplicationTests {
     }
 
     @Test
-    void transcripcionIndicaConfiguracionFaltanteSinApiKey() throws Exception {
+    void transcripcionIndicaQueWhisperNoEstaInstalado() throws Exception {
         MockMultipartFile audio = new MockMultipartFile(
                 "audio",
                 "comando.webm",
@@ -60,7 +63,9 @@ class AviApiApplicationTests {
 
         mockMvc.perform(multipart("/api/v1/transcribir").file(audio))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.message").value("Falta configurar OPENAI_API_KEY en el backend."));
+                .andExpect(jsonPath("$.message").value(
+                        "Whisper local no está disponible. Instálalo y asegúrate de que el comando '__avi_whisper_missing__' esté en PATH."
+                ));
     }
 
     @Test

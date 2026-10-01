@@ -39,7 +39,7 @@
     </div>
     <div class="badges">
       <span class="badge" id="apiBadge">API…</span>
-      <span class="badge" id="transcriptionBadge">Transcripción…</span>
+      <span class="badge" id="transcriptionBadge">Whisper local…</span>
       <span class="badge" id="supabaseBadge">Supabase…</span>
     </div>
   </header>
@@ -275,7 +275,7 @@
   async function startRecording() {
     if (!transcriptionConfigured) {
       recordStatus.className = "voice-status error";
-      recordStatus.textContent = "Falta OPENAI_API_KEY en Spring Boot. Configúrala y reinicia la API.";
+      recordStatus.textContent = "Whisper local no está disponible. Instálalo/activa el entorno y reinicia Spring Boot.";
       return;
     }
     if (!window.MediaRecorder) {
@@ -431,12 +431,12 @@
       supabaseConfigured = !!s.supabaseConfigurado;
       transcriptionConfigured = !!s.transcripcionConfigurada;
       badge("apiBadge","API ✓","ok");
-      badge("transcriptionBadge",transcriptionConfigured ? "Voz backend ✓" : "Voz backend pendiente",transcriptionConfigured ? "ok" : "warn");
+      badge("transcriptionBadge",transcriptionConfigured ? "Whisper local ✓" : "Whisper local pendiente",transcriptionConfigured ? "ok" : "warn");
       badge("supabaseBadge",supabaseConfigured ? "Supabase ✓" : "Supabase pendiente",supabaseConfigured ? "ok" : "warn");
       recordBtn.disabled = !transcriptionConfigured;
       recordStatus.textContent = transcriptionConfigured
         ? "Listo para grabar con " + (s.modeloTranscripcion || "modelo de transcripción") + "."
-        : "Configura OPENAI_API_KEY para habilitar la transcripción de audio.";
+        : "Whisper local no está disponible. Activa .venv-whisper o configura WHISPER_COMMAND.";
       validateManualForm();
       return s;
     } catch (e) {

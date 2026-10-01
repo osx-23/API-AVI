@@ -13,7 +13,9 @@ avi:
   supabase:
     url: ${SUPABASE_URL:https://adozechgzkbqopujaapp.supabase.co}
     key: ${SUPABASE_PUBLISHABLE_KEY:}
-  openai:
-    api-key: ${OPENAI_API_KEY:}
-    transcription-model: ${OPENAI_TRANSCRIPTION_MODEL:gpt-4o-mini-transcribe}
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+  whisper:
+    command: ${WHISPER_COMMAND:whisper}
+    model: ${WHISPER_MODEL:small}
+    language: ${WHISPER_LANGUAGE:Spanish}
+    device: ${WHISPER_DEVICE:}
+    timeout-seconds: ${WHISPER_TIMEOUT_SECONDS:600}
