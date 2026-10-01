@@ -38,6 +38,7 @@ public class LocalWhisperTranscriptionService {
 
     private final WhisperProperties properties;
     private final VoiceCommandParser parser;
+    private volatile Boolean availabilityCache;
 
     public LocalWhisperTranscriptionService(
             WhisperProperties properties,
@@ -48,6 +49,11 @@ public class LocalWhisperTranscriptionService {
     }
 
     public boolean isAvailable() {
+        Boolean cached = availabilityCache;
+        if (cached != null) {
+            return cached;
+        }
+
         Process process = null;
         try {
             process = new ProcessBuilder(properties.effectiveCommand(), "--help")
@@ -55,16 +61,21 @@ public class LocalWhisperTranscriptionService {
                     .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                     .start();
 
-            boolean finished = process.waitFor(5, TimeUnit.SECONDS);
+            boolean finished = process.waitFor(15, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
+                availabilityCache = false;
                 return false;
             }
-            return process.exitValue() == 0;
+
+            boolean available = process.exitValue() == 0;
+            availabilityCache = available;
+            return available;
         } catch (Exception ignored) {
             if (process != null) {
                 process.destroyForcibly();
             }
+            availabilityCache = false;
             return false;
         }
     }
