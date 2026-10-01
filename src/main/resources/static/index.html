@@ -454,21 +454,199 @@
   }
 
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const NativeRecognition = window.SpeechRecognition;
   if (!Recognition) {
     browserSpeechBtn.disabled = true;
     $("browserSpeechStatus").textContent = "SpeechRecognition no disponible en este navegador.";
   } else {
     const recognition = new Recognition();
-    recognition.lang="es-PE"; recognition.interimResults=false; recognition.continuous=false;
-    let running=false;
-    browserSpeechBtn.addEventListener("click",() => {
-      if (running) { recognition.stop(); return; }
-      try { recognition.start(); } catch (_) {}
-    });
-    recognition.onstart=()=>{running=true;browserSpeechBtn.textContent="■ Detener";$("browserSpeechStatus").textContent="Escuchando…";};
-    recognition.onresult=e=>{const t=e.results?.[0]?.[0]?.transcript||"";texto.value=t;interpret();};
-    recognition.onerror=e=>{$("browserSpeechStatus").textContent="SpeechRecognition: "+e.error+" · usa Grabar comando como método principal.";};
-    recognition.onend=()=>{running=false;browserSpeechBtn.textContent="Hablar (SpeechRecognition)";};
+    recognition.lang = "es-PE";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 3;
+
+    let running = false;
+    let speechStream = null;
+    let usedExplicitTrack = false;
+    let audioStarted = false;
+    let soundStarted = false;
+    let speechStarted = false;
+
+    async function closeBrowserSpeechStream() {
+      speechStream?.getTracks().forEach(track => track.stop());
+      speechStream = null;
+    }
+
+    async function prepareBrowserRecognition() {
+      recognition.lang = "es-PE";
+      usedExplicitTrack = false;
+      audioStarted = false;
+      soundStarted = false;
+      speechStarted = false;
+
+      const supportsOnDevice = !!(
+        NativeRecognition &&
+        "processLocally" in recognition &&
+        typeof NativeRecognition.available === "function" &&
+        typeof NativeRecognition.install === "function"
+      );
+
+      if (!supportsOnDevice) {
+        if ("processLocally" in recognition) recognition.processLocally = false;
+        return "remoto";
+      }
+
+      const languages = ["es-PE", "es-ES", "es-MX"];
+      for (const language of languages) {
+        try {
+          $("browserSpeechStatus").textContent = "Comprobando reconocimiento local " + language + "…";
+          const availability = await Promise.race([
+            NativeRecognition.available({
+              langs:[language],
+              processLocally:true,
+              quality:"dictation"
+            }),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error("timeout")),3500))
+          ]);
+
+          if (availability === "available") {
+            recognition.lang = language;
+            recognition.processLocally = true;
+            return "local " + language;
+          }
+
+          if (availability === "downloadable" || availability === "downloading") {
+            $("browserSpeechStatus").textContent = "Instalando paquete local " + language + "…";
+            const installed = await Promise.race([
+              NativeRecognition.install({
+                langs:[language],
+                processLocally:true,
+                quality:"dictation"
+              }),
+              new Promise((_,reject)=>setTimeout(()=>reject(new Error("timeout")),12000))
+            ]);
+            if (installed) {
+              recognition.lang = language;
+              recognition.processLocally = true;
+              return "local " + language;
+            }
+          }
+        } catch (_) {
+          // Probamos el siguiente idioma o caemos al motor remoto.
+        }
+      }
+
+      recognition.processLocally = false;
+      recognition.lang = "es-PE";
+      return "remoto";
+    }
+
+    async function startBrowserRecognition() {
+      if (running) {
+        recognition.stop();
+        return;
+      }
+
+      try {
+        await closeAudioStream();
+        await closeBrowserSpeechStream();
+
+        speechStream = await navigator.mediaDevices.getUserMedia({
+          audio: chosenAudioConstraints()
+        });
+
+        const track = speechStream.getAudioTracks()[0];
+        if (!track) throw new Error("No se obtuvo una pista de audio.");
+
+        if ("contentHint" in track) {
+          try { track.contentHint = "speech-recognition"; } catch (_) {}
+        }
+
+        const engine = await prepareBrowserRecognition();
+        const label = track.label || "micrófono seleccionado";
+        $("browserSpeechStatus").textContent =
+          "Preparado: " + label + " · motor " + engine + ". Iniciando…";
+
+        try {
+          recognition.start(track);
+          usedExplicitTrack = true;
+        } catch (trackError) {
+          usedExplicitTrack = false;
+          $("browserSpeechStatus").textContent =
+            "Este navegador no acepta start(audioTrack); usando su entrada predeterminada.";
+          recognition.start();
+        }
+      } catch (e) {
+        await closeBrowserSpeechStream();
+        $("browserSpeechStatus").textContent = "No se pudo iniciar: " + e.message;
+      }
+    }
+
+    browserSpeechBtn.addEventListener("click", startBrowserRecognition);
+
+    recognition.onstart = () => {
+      running = true;
+      browserSpeechBtn.textContent = "■ Detener";
+      $("browserSpeechStatus").textContent =
+        "Reconocimiento iniciado" + (usedExplicitTrack ? " con el micrófono seleccionado." : ".");
+    };
+
+    recognition.onaudiostart = () => {
+      audioStarted = true;
+      $("browserSpeechStatus").textContent =
+        "1/3 Audio capturado ✓ · habla ahora.";
+    };
+
+    recognition.onsoundstart = () => {
+      soundStarted = true;
+      $("browserSpeechStatus").textContent =
+        "2/3 Sonido detectado ✓ · buscando voz…";
+    };
+
+    recognition.onspeechstart = () => {
+      speechStarted = true;
+      $("browserSpeechStatus").textContent =
+        "3/3 Voz detectada ✓ · transcribiendo…";
+    };
+
+    recognition.onresult = event => {
+      let finalText = "";
+      let interimText = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const part = event.results[i][0]?.transcript || "";
+        if (event.results[i].isFinal) finalText += part + " ";
+        else interimText += part;
+      }
+      const visible = (finalText || interimText).trim();
+      if (visible) texto.value = visible;
+      if (finalText.trim()) {
+        $("browserSpeechStatus").textContent =
+          "✓ Texto reconocido: " + finalText.trim();
+        interpret();
+      }
+    };
+
+    recognition.onerror = event => {
+      let detail = "SpeechRecognition: " + event.error + ".";
+      if (event.error === "no-speech") {
+        if (audioStarted && soundStarted && !speechStarted) {
+          detail += " El navegador recibió audio y sonido, pero su detector no lo clasificó como voz.";
+        } else if (audioStarted && !soundStarted) {
+          detail += " La pista llegó al reconocedor, pero no detectó suficiente señal.";
+        } else if (!audioStarted) {
+          detail += " El reconocedor no llegó a iniciar la captura de audio.";
+        }
+      } else if (event.error === "network") {
+        detail += " Falló el servicio remoto del navegador; usa modo local si está disponible o Whisper.";
+      }
+      $("browserSpeechStatus").textContent = detail;
+    };
+
+    recognition.onend = async () => {
+      running = false;
+      browserSpeechBtn.textContent = "Hablar (SpeechRecognition)";
+      await closeBrowserSpeechStream();
+    };
   }
 
   recordBtn.addEventListener("click",async()=>{
